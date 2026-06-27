@@ -1,0 +1,14 @@
+# Exclude dari build context untuk backend
+**/bin
+**/obj
+**/.vs
+**/.vscode
+**/.idea
+**/*.user
+**/*.suo
+**/.git
+**/.gitignore
+**/Dockerfile
+**/.dockerignore
+**/README.md
+**/CHANGELOG.md

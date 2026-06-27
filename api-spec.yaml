@@ -1,0 +1,716 @@
+openapi: 3.0.3
+info:
+  title: DSS Rekomendasi Pekerjaan API
+  description: |
+    API untuk aplikasi Decision Support System (DSS) rekomendasi pekerjaan
+    berdasarkan preferensi pengguna menggunakan metode SAW (Simple Additive
+    Weighting). Aplikasi ini dibangun dengan ASP.NET Core 10.0 Minimal API,
+    PostgreSQL, dan ReactJS, dijalankan di atas Docker.
+
+    **Autentikasi**: Menggunakan Basic Auth (header `Authorization: Basic base64(email:password)`).
+
+    **Format response standar**:
+    - Success: `{ "success": true, "message": "...", "data": {...} }`
+    - Error:   `{ "success": false, "message": "...", "errors": {...} }`
+  version: 1.0.0
+  contact:
+    name: DSS Rekomendasi Pekerjaan
+    email: support@example.com
+
+servers:
+  - url: http://localhost:5000/api
+    description: Development server (Docker Compose)
+
+tags:
+  - name: Auth
+    description: Endpoint untuk autentikasi & manajemen sesi pengguna
+  - name: Kriteria
+    description: Endpoint untuk data master kriteria (C1 - C10)
+  - name: Preferensi
+    description: Endpoint untuk preferensi pelamar (halaman Preferensi)
+  - name: Loker
+    description: Endpoint untuk data loker/perusahaan (halaman Dashboard Admin)
+  - name: Nilai Loker
+    description: Endpoint untuk nilai per-kriteria tiap loker
+  - name: Rekomendasi
+    description: Endpoint hasil perangkingan SAW (halaman Dashboard Pelamar)
+
+components:
+  securitySchemes:
+    BasicAuth:
+      type: http
+      scheme: basic
+      description: Basic Authentication dengan email dan password
+
+  schemas:
+    # ===================== Response Wrapper =====================
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: "Operasi berhasil"
+        data:
+          nullable: true
+
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: "Terjadi kesalahan"
+        errors:
+          type: object
+          nullable: true
+          additionalProperties: true
+
+    # ===================== User & Auth =====================
+    RegisterRequest:
+      type: object
+      required: [username, email, password, role]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 50
+          example: "budi_santoso"
+        email:
+          type: string
+          format: email
+          example: "budi@example.com"
+        password:
+          type: string
+          format: password
+          minLength: 6
+          example: "password123"
+        role:
+          type: string
+          enum: [admin, pelamar]
+          example: "pelamar"
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          example: "budi@example.com"
+        password:
+          type: string
+          format: password
+          example: "password123"
+
+    LoginResponse:
+      type: object
+      description: |
+        Tidak ada token. Frontend cukup menyimpan `email` & `password` user
+        (mis. di sessionStorage) lalu mengirim keduanya sebagai Basic Auth
+        pada setiap request berikutnya:
+        `Authorization: Basic base64(email:password)`
+      properties:
+        user:
+          $ref: '#/components/schemas/User'
+
+    User:
+      type: object
+      properties:
+        user_id:
+          type: integer
+          example: 1
+        username:
+          type: string
+          example: "budi_santoso"
+        email:
+          type: string
+          format: email
+          example: "budi@example.com"
+        role:
+          type: string
+          enum: [admin, pelamar]
+          example: "pelamar"
+
+    # ===================== Kriteria =====================
+    SkalaKriteria:
+      type: object
+      description: Deskripsi tiap skala 1-5 untuk satu kriteria
+      properties:
+        "1": { type: string, example: "Sangat Buruk / Tidak Ada" }
+        "2": { type: string, example: "Buruk / Kurang Jelas" }
+        "3": { type: string, example: "Cukup / Standar" }
+        "4": { type: string, example: "Baik / Jelas" }
+        "5": { type: string, example: "Sangat Baik / Sangat Jelas" }
+
+    Kriteria:
+      type: object
+      properties:
+        kriteria_id:
+          type: string
+          example: "C1"
+        nama_kriteria:
+          type: string
+          example: "Gaji Pokok & Tunjangan"
+        jenis_atribut:
+          type: string
+          enum: [benefit, cost]
+          example: "benefit"
+        satuan:
+          type: string
+          nullable: true
+          example: "Rupiah per bulan"
+        deskripsi:
+          type: string
+          nullable: true
+        skala:
+          $ref: '#/components/schemas/SkalaKriteria'
+
+    # ===================== Preferensi =====================
+    PreferensiInputItem:
+      type: object
+      required: [kriteria_id, nilai_asli]
+      properties:
+        kriteria_id:
+          type: string
+          example: "C1"
+        nilai_asli:
+          type: string
+          description: Nilai asli yang diisi user (mis. "8500000", "12", atau label dropdown)
+          example: "8500000"
+
+    PreferensiUpsertRequest:
+      type: object
+      required: [preferences]
+      properties:
+        preferences:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/PreferensiInputItem'
+
+    Preferensi:
+      type: object
+      properties:
+        preference_id:
+          type: integer
+          example: 12
+        user_id:
+          type: integer
+          example: 1
+        kriteria_id:
+          type: string
+          example: "C1"
+        nilai_asli:
+          type: string
+          description: Nilai asli yang diinput user
+          example: "8500000"
+        nilai_bobot:
+          type: integer
+          minimum: 1
+          maximum: 5
+          description: Hasil konversi sistem ke skala 1-5
+          example: 3
+
+    # ===================== Loker / Perusahaan =====================
+    NilaiLokerInput:
+      type: object
+      required: [kriteria_id, nilai_riil, nilai_skala]
+      properties:
+        kriteria_id:
+          type: string
+          example: "C1"
+        nilai_riil:
+          type: string
+          description: Nilai asli dari perusahaan untuk kriteria ini
+          example: "Rp 10.000.000"
+        nilai_skala:
+          type: integer
+          minimum: 1
+          maximum: 5
+          example: 3
+
+    CreateLokerRequest:
+      type: object
+      required: [nama_perusahaan, posisi_tersedia, lokasi, nilai_per_kriteria]
+      properties:
+        nama_perusahaan:
+          type: string
+          maxLength: 100
+          example: "PT. Teknologi Maju"
+        posisi_tersedia:
+          type: string
+          maxLength: 100
+          example: "Backend Developer"
+        lokasi:
+          type: string
+          maxLength: 100
+          example: "Jakarta Selatan"
+        nilai_per_kriteria:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/NilaiLokerInput'
+
+    UpdateLokerRequest:
+      type: object
+      properties:
+        nama_perusahaan:
+          type: string
+        posisi_tersedia:
+          type: string
+        lokasi:
+          type: string
+        nilai_per_kriteria:
+          type: array
+          items:
+            $ref: '#/components/schemas/NilaiLokerInput'
+
+    NilaiLoker:
+      type: object
+      properties:
+        nilai_id:
+          type: integer
+          example: 101
+        perusahaan_id:
+          type: integer
+          example: 7
+        kriteria_id:
+          type: string
+          example: "C1"
+        nilai_riil:
+          type: string
+          example: "Rp 10.000.000"
+        nilai_skala:
+          type: integer
+          minimum: 1
+          maximum: 5
+          example: 3
+
+    Loker:
+      type: object
+      properties:
+        perusahaan_id:
+          type: integer
+          example: 7
+        nama_perusahaan:
+          type: string
+          example: "PT. Teknologi Maju"
+        posisi_tersedia:
+          type: string
+          example: "Backend Developer"
+        lokasi:
+          type: string
+          example: "Jakarta Selatan"
+        nilai:
+          type: array
+          items:
+            $ref: '#/components/schemas/NilaiLoker'
+
+    # ===================== Rekomendasi SAW =====================
+    RekomendasiItem:
+      type: object
+      properties:
+        rank:
+          type: integer
+          example: 1
+        perusahaan_id:
+          type: integer
+          example: 7
+        nama_perusahaan:
+          type: string
+          example: "PT. Teknologi Maju"
+        posisi_tersedia:
+          type: string
+          example: "Backend Developer"
+        lokasi:
+          type: string
+          example: "Jakarta Selatan"
+        skor_saw:
+          type: number
+          format: float
+          description: Hasil perhitungan SAW (0 - 1, semakin tinggi semakin cocok)
+          example: 0.8525
+        detail_nilai:
+          type: array
+          description: Nilai per-kriteria dari loker (untuk transparansi)
+          items:
+            $ref: '#/components/schemas/NilaiLoker'
+
+paths:
+  # ============================================================
+  # AUTH
+  # ============================================================
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Registrasi pengguna baru (pelamar/admin)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Registrasi berhasil
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/User'
+        '400':
+          description: Validasi gagal
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Email sudah terdaftar
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Login (validasi email & password, tanpa token)
+      description: |
+        Backend hanya memvalidasi kredensial lalu mengembalikan data user.
+        Tidak ada token yang disimpan di database. Frontend cukup menyimpan
+        `email` & `password` lalu mengirim keduanya sebagai header Basic Auth
+        pada setiap request berikutnya:
+        `Authorization: Basic base64(email:password)`
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login berhasil, data user dikembalikan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          description: Email atau password salah
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Ambil profil user yang sedang login
+      responses:
+        '200':
+          description: Data user
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/User'
+        '401':
+          description: Belum login / token tidak valid
+
+  # ============================================================
+  # KRITERIA (Master Data)
+  # ============================================================
+  /kriteria:
+    get:
+      tags: [Kriteria]
+      summary: Ambil semua kriteria (C1 - C10) dengan deskripsi skalanya
+      description: |
+        Endpoint ini dipakai oleh frontend untuk:
+        - Merender form input preferensi (label & deskripsi skala).
+        - Merender kolom tabel nilai loker di dashboard admin.
+      responses:
+        '200':
+          description: Daftar 10 kriteria
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Kriteria'
+
+  /kriteria/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        example: C1
+    get:
+      tags: [Kriteria]
+      summary: Ambil detail satu kriteria
+      responses:
+        '200':
+          description: Detail kriteria
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Kriteria'
+        '404':
+          description: Kriteria tidak ditemukan
+
+  # ============================================================
+  # PREFERENSI (Halaman Preferensi - Pelamar)
+  # ============================================================
+  /preferences:
+    get:
+      tags: [Preferensi]
+      summary: Ambil preferensi user yang sedang login
+      description: Mengembalikan daftar 10 preferensi (C1 - C10). Jika user belum pernah input, akan 404.
+      responses:
+        '200':
+          description: Daftar preferensi
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Preferensi'
+        '404':
+          description: User belum memiliki preferensi apapun
+
+    post:
+      tags: [Preferensi]
+      summary: Simpan / upsert preferensi user
+      description: |
+        Menerima array berisi 10 item preferensi (satu per kriteria).
+        Backend akan:
+        1. Mengkonversi `nilai_asli` menjadi `nilai_bobot` (skala 1-5) sesuai rentang/deskripsi di tabel kriteria.
+        2. Menghapus preferensi lama & insert yang baru (replace strategy).
+
+        Contoh konversi:
+        - C1 nilai_asli "8500000" -> nilai_bobot 3
+        - C2 nilai_asli "12"     -> nilai_bobot 2
+        - C3 nilai_asli "Hybrid (3 hari WFO, 2 hari WFH)" -> nilai_bobot 3
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PreferensiUpsertRequest'
+      responses:
+        '200':
+          description: Preferensi berhasil disimpan
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Preferensi'
+        '400':
+          description: Validasi gagal (mis. ada kriteria_id yang tidak valid)
+
+    delete:
+      tags: [Preferensi]
+      summary: Reset / hapus semua preferensi user
+      responses:
+        '200':
+          description: Preferensi berhasil dihapus
+
+  # ============================================================
+  # LOKER / PERUSAHAAN (Halaman Dashboard Admin)
+  # ============================================================
+  /loker:
+    get:
+      tags: [Loker]
+      summary: Ambil semua daftar loker (untuk dashboard admin)
+      description: Hanya role `admin` yang boleh akses.
+      responses:
+        '200':
+          description: Daftar loker beserta nilai per kriteria
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Loker'
+        '403':
+          description: Bukan admin
+
+    post:
+      tags: [Loker]
+      summary: Tambah loker baru (admin only)
+      description: Sekaligus insert nilai per-kriteria untuk loker tersebut.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateLokerRequest'
+      responses:
+        '201':
+          description: Loker berhasil dibuat
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Loker'
+        '403':
+          description: Bukan admin
+
+  /loker/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+        example: 7
+    get:
+      tags: [Loker]
+      summary: Ambil detail satu loker (termasuk nilai per kriteria)
+      responses:
+        '200':
+          description: Detail loker
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Loker'
+        '404':
+          description: Loker tidak ditemukan
+
+    put:
+      tags: [Loker]
+      summary: Update data loker (admin only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateLokerRequest'
+      responses:
+        '200':
+          description: Loker berhasil diperbarui
+        '403':
+          description: Bukan admin
+        '404':
+          description: Loker tidak ditemukan
+
+    delete:
+      tags: [Loker]
+      summary: Hapus loker (admin only)
+      description: Sekaligus menghapus semua baris `nilai_perusahaan` yang berelasi.
+      responses:
+        '200':
+          description: Loker berhasil dihapus
+        '403':
+          description: Bukan admin
+        '404':
+          description: Loker tidak ditemukan
+
+  /loker/{id}/nilai:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+    get:
+      tags: [Nilai Loker]
+      summary: Ambil nilai per-kriteria untuk satu loker
+      responses:
+        '200':
+          description: Daftar 10 nilai (C1 - C10)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/NilaiLoker'
+
+  # ============================================================
+  # REKOMENDASI SAW (Halaman Dashboard Pelamar)
+  # ============================================================
+  /rekomendasi:
+    get:
+      tags: [Rekomendasi]
+      summary: Ambil daftar loker yang sudah diranking sesuai preferensi user (metode SAW)
+      description: |
+        Backend melakukan perhitungan SAW:
+        1. Normalisasi matriks keputusan (`nilai_skala` tiap loker per kriteria).
+           - Benefit: `r_ij = x_ij / max(x_ij)`
+           - Cost:    `r_ij = min(x_ij) / x_ij`
+        2. Skor preferensi = `nilai_bobot` user untuk masing-masing kriteria.
+        3. Skor SAW = `Σ (r_ij × w_j)` untuk setiap alternatif.
+        4. Diurutkan descending.
+
+        Hanya untuk role `pelamar` yang sudah pernah mengisi preferensi.
+      responses:
+        '200':
+          description: Daftar loker terurut dari yang paling cocok
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/RekomendasiItem'
+        '404':
+          description: User belum memiliki preferensi

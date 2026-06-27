@@ -1,0 +1,30 @@
+# === .NET / BackEnd ===
+**/bin/
+**/obj/
+*.user
+*.suo
+*.vs/
+*.DotSettings
+*.nupkg
+
+# === Node / FrontEnd ===
+node_modules/
+dist/
+*.log
+
+# === Environment & Secrets ===
+.env
+!.env.example
+
+# === OS ===
+.DS_Store
+Thumbs.db
+
+# === IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# === Misc ===
+seed-loker.js
